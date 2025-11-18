@@ -142,6 +142,7 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   // Gripper mapping functions
   double joint_to_motor_radians(double joint_value);
   double motor_radians_to_joint(double motor_radians);
+  double gripper_m_per_rad_{0.0404};
 };
 
 }  // namespace openarm_hardware

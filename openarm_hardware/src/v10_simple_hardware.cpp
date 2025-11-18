@@ -60,6 +60,17 @@ bool OpenArm_v10HW::parse_config(const hardware_interface::HardwareInfo& info) {
     can_fd_ = (value == "true");
   }
 
+  it = info.hardware_parameters.find("gripper_m_per_rad");
+  if (it != info.hardware_parameters.end()) {
+    try {
+      gripper_m_per_rad_ = std::stod(it->second);
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                   "Invalid gripper_m_per_rad value '%s', using default %f: %s",
+                   it->second.c_str(), gripper_m_per_rad_, e.what());
+    }
+  }
+
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
               "Configuration: CAN=%s, arm_prefix=%s, hand=%s, can_fd=%s",
               can_interface_.c_str(), arm_prefix_.c_str(),
@@ -338,17 +349,15 @@ void OpenArm_v10HW::set_current_pose() {
 }
 
 // Gripper mapping helper functions
-double OpenArm_v10HW::joint_to_motor_radians(double joint_value) {
-  // Joint 0=closed -> motor 0 rad, Joint 0.044=open -> motor -1.0472 rad
-  return (joint_value / GRIPPER_JOINT_0_POSITION) *
-         GRIPPER_MOTOR_1_RADIANS;  // Scale from 0-0.044 to 0 to -1.0472
+double OpenArm_v10HW::joint_to_motor_radians(double joint_value_m) {
+  // joint_value_m is in meters
+  // motor radians = meters / (meters per radian)
+  return joint_value_m / gripper_m_per_rad_;
 }
 
 double OpenArm_v10HW::motor_radians_to_joint(double motor_radians) {
-  // Motor 0 rad=closed -> joint 0, Motor -1.0472 rad=open -> joint 0.044
-  return GRIPPER_JOINT_0_POSITION *
-         (motor_radians /
-          GRIPPER_MOTOR_1_RADIANS);  // Scale from 0 to -1.0472 to 0-0.044
+  // joint value in meters = radians * (meters per radian)
+  return motor_radians * gripper_m_per_rad_;
 }
 
 }  // namespace openarm_hardware
