@@ -28,6 +28,8 @@ namespace openarm_hardware {
 
 OpenArm_v10HW::OpenArm_v10HW() = default;
 
+static constexpr double GRIPPER_METERS_PER_RAD = 0.0404; 
+
 bool OpenArm_v10HW::parse_config(const hardware_interface::HardwareInfo& info) {
   // Parse CAN interface (default: can0)
   auto it = info.hardware_parameters.find("can_interface");
@@ -58,17 +60,6 @@ bool OpenArm_v10HW::parse_config(const hardware_interface::HardwareInfo& info) {
     std::string value = it->second;
     std::transform(value.begin(), value.end(), value.begin(), ::tolower);
     can_fd_ = (value == "true");
-  }
-
-  it = info.hardware_parameters.find("gripper_m_per_rad");
-  if (it != info.hardware_parameters.end()) {
-    try {
-      gripper_m_per_rad_ = std::stod(it->second);
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
-                   "Invalid gripper_m_per_rad value '%s', using default %f: %s",
-                   it->second.c_str(), gripper_m_per_rad_, e.what());
-    }
   }
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
@@ -350,14 +341,13 @@ void OpenArm_v10HW::set_current_pose() {
 
 // Gripper mapping helper functions
 double OpenArm_v10HW::joint_to_motor_radians(double joint_value_m) {
-  // joint_value_m is in meters
-  // motor radians = meters / (meters per radian)
-  return joint_value_m / gripper_m_per_rad_;
+  // convert meters -> motor radians
+  return joint_value_m / GRIPPER_METERS_PER_RAD;
 }
 
 double OpenArm_v10HW::motor_radians_to_joint(double motor_radians) {
-  // joint value in meters = radians * (meters per radian)
-  return motor_radians * gripper_m_per_rad_;
+  // convert motor radians -> meters for ROS
+  return motor_radians * GRIPPER_METERS_PER_RAD;
 }
 
 }  // namespace openarm_hardware
