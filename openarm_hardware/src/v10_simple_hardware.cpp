@@ -28,7 +28,7 @@ namespace openarm_hardware {
 
 OpenArm_v10HW::OpenArm_v10HW() = default;
 
-static constexpr double GRIPPER_METERS_PER_RAD = 0.0404; 
+static constexpr double GRIPPER_METERS_PER_RAD = 0.0810; 
 
 bool OpenArm_v10HW::parse_config(const hardware_interface::HardwareInfo& info) {
   // Parse CAN interface (default: can0)
