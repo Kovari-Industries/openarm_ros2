@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -62,10 +63,96 @@ bool OpenArm_v10HW::parse_config(const hardware_interface::HardwareInfo& info) {
     can_fd_ = (value == "true");
   }
 
+  // Parse torque limiting parameters (default: no limits if not specified)
+  max_torque_.resize(ARM_DOF, std::numeric_limits<double>::infinity());
+  max_pos_error_.resize(ARM_DOF, std::numeric_limits<double>::infinity());
+  max_vel_error_.resize(ARM_DOF, std::numeric_limits<double>::infinity());
+
+  // Parse max_torque (can be single value or comma-separated per joint)
+  it = info.hardware_parameters.find("max_torque");
+  if (it != info.hardware_parameters.end()) {
+    std::string value = it->second;
+    // Try to parse as comma-separated list
+    size_t pos = 0;
+    size_t idx = 0;
+    while (pos < value.length() && idx < ARM_DOF) {
+      size_t next_pos = value.find(',', pos);
+      std::string token = (next_pos == std::string::npos) 
+                          ? value.substr(pos) 
+                          : value.substr(pos, next_pos - pos);
+      max_torque_[idx] = std::stod(token);
+      pos = (next_pos == std::string::npos) ? value.length() : next_pos + 1;
+      idx++;
+    }
+    // If only one value provided, use it for all joints
+    if (idx == 1) {
+      std::fill(max_torque_.begin(), max_torque_.end(), max_torque_[0]);
+    }
+  }
+
+  // Parse max_pos_error (can be single value or comma-separated per joint)
+  it = info.hardware_parameters.find("max_pos_error");
+  if (it != info.hardware_parameters.end()) {
+    std::string value = it->second;
+    size_t pos = 0;
+    size_t idx = 0;
+    while (pos < value.length() && idx < ARM_DOF) {
+      size_t next_pos = value.find(',', pos);
+      std::string token = (next_pos == std::string::npos) 
+                          ? value.substr(pos) 
+                          : value.substr(pos, next_pos - pos);
+      max_pos_error_[idx] = std::stod(token);
+      pos = (next_pos == std::string::npos) ? value.length() : next_pos + 1;
+      idx++;
+    }
+    if (idx == 1) {
+      std::fill(max_pos_error_.begin(), max_pos_error_.end(), max_pos_error_[0]);
+    }
+  }
+
+  // Parse max_vel_error (can be single value or comma-separated per joint)
+  it = info.hardware_parameters.find("max_vel_error");
+  if (it != info.hardware_parameters.end()) {
+    std::string value = it->second;
+    size_t pos = 0;
+    size_t idx = 0;
+    while (pos < value.length() && idx < ARM_DOF) {
+      size_t next_pos = value.find(',', pos);
+      std::string token = (next_pos == std::string::npos) 
+                          ? value.substr(pos) 
+                          : value.substr(pos, next_pos - pos);
+      max_vel_error_[idx] = std::stod(token);
+      pos = (next_pos == std::string::npos) ? value.length() : next_pos + 1;
+      idx++;
+    }
+    if (idx == 1) {
+      std::fill(max_vel_error_.begin(), max_vel_error_.end(), max_vel_error_[0]);
+    }
+  }
+
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
               "Configuration: CAN=%s, arm_prefix=%s, hand=%s, can_fd=%s",
               can_interface_.c_str(), arm_prefix_.c_str(),
               hand_ ? "enabled" : "disabled", can_fd_ ? "enabled" : "disabled");
+  
+  // Log torque limiting configuration
+  bool has_limits = false;
+  for (size_t i = 0; i < ARM_DOF; ++i) {
+    if (max_torque_[i] != std::numeric_limits<double>::infinity() ||
+        max_pos_error_[i] != std::numeric_limits<double>::infinity() ||
+        max_vel_error_[i] != std::numeric_limits<double>::infinity()) {
+      has_limits = true;
+      break;
+    }
+  }
+  if (has_limits) {
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
+                "Torque limits enabled: max_torque=%.2f Nm, max_pos_error=%.3f rad, max_vel_error=%.2f rad/s",
+                max_torque_[0], max_pos_error_[0], max_vel_error_[0]);
+  } else {
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"), "Torque limits: disabled (no limits)");
+  }
+  
   return true;
 }
 
@@ -261,8 +348,21 @@ hardware_interface::return_type OpenArm_v10HW::write(
   // Control arm motors with MIT control
   std::vector<openarm::damiao_motor::MITParam> arm_params;
   for (size_t i = 0; i < ARM_DOF; ++i) {
-    arm_params.push_back({DEFAULT_KP[i], DEFAULT_KD[i], pos_commands_[i],
-                          vel_commands_[i], tau_commands_[i]});
+    // Limit position error (distance from current position)
+    double pos_error = pos_commands_[i] - pos_states_[i];
+    double clamped_pos_error = std::clamp(pos_error, -max_pos_error_[i], max_pos_error_[i]);
+    double clamped_pos_cmd = pos_states_[i] + clamped_pos_error;
+
+    // Limit velocity error (velocity derivative)
+    double vel_error = vel_commands_[i] - vel_states_[i];
+    double clamped_vel_error = std::clamp(vel_error, -max_vel_error_[i], max_vel_error_[i]);
+    double clamped_vel_cmd = vel_states_[i] + clamped_vel_error;
+
+    // Limit feedforward torque
+    double clamped_tau = std::clamp(tau_commands_[i], -max_torque_[i], max_torque_[i]);
+
+    arm_params.push_back({DEFAULT_KP[i], DEFAULT_KD[i], clamped_pos_cmd,
+                          clamped_vel_cmd, clamped_tau});
   }
   openarm_->get_arm().mit_control_all(arm_params);
   // Control gripper if enabled
