@@ -24,6 +24,8 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
+#include "std_msgs/msg/bool.hpp"
 
 namespace openarm_hardware {
 
@@ -130,6 +132,18 @@ bool OpenArm_v10HW::parse_config(const hardware_interface::HardwareInfo& info) {
     }
   }
 
+  // Parse high pass filter cutoff frequency (default: 0.1 Hz)
+  it = info.hardware_parameters.find("hpf_cutoff_freq");
+  hpf_cutoff_freq_ = (it != info.hardware_parameters.end()) 
+      ? std::stod(it->second) 
+      : 0.5;  // Default 0.1 Hz
+
+  // Parse external torque threshold (default: 0.5 Nm)
+  it = info.hardware_parameters.find("external_torque_threshold");
+  external_torque_threshold_ = (it != info.hardware_parameters.end()) 
+      ? std::stod(it->second) 
+      : 0.5;  // Default 0.5 Nm
+
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
               "Configuration: CAN=%s, arm_prefix=%s, hand=%s, can_fd=%s",
               can_interface_.c_str(), arm_prefix_.c_str(),
@@ -234,8 +248,40 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_init(
   vel_states_.resize(total_joints, 0.0);
   tau_states_.resize(total_joints, 0.0);
 
+  // Initialize high pass filter state vectors
+  tau_filtered_.resize(total_joints, 0.0);
+  tau_prev_.resize(total_joints, 0.0);
+  hpf_alpha_ = 0.0;  // Will be calculated in read() based on period
+
+  // Initialize ROS2 node for publishing
+  std::string node_name = "openarm_hardware";
+  if (!arm_prefix_.empty()) {
+    node_name += "_" + arm_prefix_;
+  }
+  node_ = rclcpp::Node::make_shared(node_name);
+
+  // Create publishers for filtered torque and external torque detection
+  std::string filtered_torque_topic = arm_prefix_.empty() 
+      ? "filtered_joint_torques" 
+      : arm_prefix_ + "filtered_joint_torques";
+  std::string external_torque_topic = arm_prefix_.empty() 
+      ? "external_torque_detected" 
+      : arm_prefix_ + "external_torque_detected";
+
+  filtered_torque_pub_ = node_->create_publisher<sensor_msgs::msg::JointState>(
+      filtered_torque_topic, 10);
+  external_torque_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
+      external_torque_topic, 10);
+
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
               "OpenArm V10 Simple HW initialized successfully");
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
+              "High pass filter: cutoff_freq=%.3f Hz, external_torque_threshold=%.3f Nm",
+              hpf_cutoff_freq_, external_torque_threshold_);
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
+              "Publishing filtered torque to: %s", filtered_torque_topic.c_str());
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
+              "Publishing external torque detection to: %s", external_torque_topic.c_str());
 
   return CallbackReturn::SUCCESS;
 }
@@ -312,17 +358,52 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_deactivate(
 }
 
 hardware_interface::return_type OpenArm_v10HW::read(
-    const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
+    const rclcpp::Time& time, const rclcpp::Duration& period) {
   // Receive all motor states
   openarm_->refresh_all();
   openarm_->recv_all();
+
+  // Calculate high pass filter coefficient based on actual period
+  const double dt = period.seconds();
+  if (dt > 0.0 && hpf_cutoff_freq_ > 0.0) {
+    // First-order high pass filter: alpha = dt * cutoff / (1 + dt * cutoff)
+    hpf_alpha_ = (dt * hpf_cutoff_freq_) / (1.0 + dt * hpf_cutoff_freq_);
+  } else {
+    hpf_alpha_ = 0.0;  // No filtering if invalid period
+  }
+
+  // Track maximum filtered torque for collision detection
+  double max_filtered_torque = 0.0;
 
   // Read arm joint states
   const auto& arm_motors = openarm_->get_arm().get_motors();
   for (size_t i = 0; i < ARM_DOF && i < arm_motors.size(); ++i) {
     pos_states_[i] = arm_motors[i].get_position();
     vel_states_[i] = arm_motors[i].get_velocity();
-    tau_states_[i] = arm_motors[i].get_torque();
+    
+    // Read raw torque
+    double tau_raw = arm_motors[i].get_torque();
+    
+    // Update state interface with raw torque (for /joint_states topic)
+    tau_states_[i] = tau_raw;
+    
+    // Apply high pass filter: y[n] = alpha * (x[n] - x[n-1]) + (1-alpha) * y[n-1]
+    // This removes DC/low-frequency components (gravity, static loads)
+    if (hpf_alpha_ > 0.0) {
+      tau_filtered_[i] = hpf_alpha_ * (tau_raw - tau_prev_[i]) + 
+                         (1.0 - hpf_alpha_) * tau_filtered_[i];
+      tau_prev_[i] = tau_raw;
+    } else {
+      // No filtering on first call or if period is invalid
+      tau_filtered_[i] = tau_raw;
+      tau_prev_[i] = tau_raw;
+    }
+    
+    // Track maximum absolute filtered torque for collision detection
+    double abs_filtered = std::abs(tau_filtered_[i]);
+    if (abs_filtered > max_filtered_torque) {
+      max_filtered_torque = abs_filtered;
+    }
   }
 
   // Read gripper state if enabled
@@ -336,9 +417,59 @@ hardware_interface::return_type OpenArm_v10HW::read(
 
       // Unimplemented: Velocity and torque mapping
       vel_states_[ARM_DOF] = 0;  // gripper_motors[0].get_velocity();
-      tau_states_[ARM_DOF] = 0;  // gripper_motors[0].get_torque();
+      
+      // Read raw gripper torque if available
+      double tau_raw = 0;  // gripper_motors[0].get_torque(); // Uncomment when available
+      
+      // Update state interface with raw torque (for /joint_states topic)
+      tau_states_[ARM_DOF] = tau_raw;
+      
+      // Apply filter to gripper torque if available
+      if (hpf_alpha_ > 0.0) {
+        tau_filtered_[ARM_DOF] = hpf_alpha_ * (tau_raw - tau_prev_[ARM_DOF]) + 
+                                 (1.0 - hpf_alpha_) * tau_filtered_[ARM_DOF];
+        tau_prev_[ARM_DOF] = tau_raw;
+      } else {
+        tau_filtered_[ARM_DOF] = tau_raw;
+        tau_prev_[ARM_DOF] = tau_raw;
+      }
+      
+      // Check gripper torque for collision
+      double abs_filtered = std::abs(tau_filtered_[ARM_DOF]);
+      if (abs_filtered > max_filtered_torque) {
+        max_filtered_torque = abs_filtered;
+      }
     }
   }
+
+  // Detect external torque (collision) if filtered torque exceeds threshold
+  bool external_torque_detected = (max_filtered_torque > external_torque_threshold_);
+
+  // Publish filtered torque as JointState message
+  if (filtered_torque_pub_ && node_) {
+    sensor_msgs::msg::JointState msg;
+    msg.header.stamp = time;
+    msg.header.frame_id = arm_prefix_.empty() ? "base_link" : arm_prefix_ + "base_link";
+    msg.name = joint_names_;
+    msg.effort.resize(joint_names_.size());
+    
+    // Copy filtered torques
+    for (size_t i = 0; i < joint_names_.size() && i < tau_filtered_.size(); ++i) {
+      msg.effort[i] = tau_filtered_[i];
+    }
+    
+    filtered_torque_pub_->publish(msg);
+    }
+
+  // Publish external torque detection (collision detection)
+  if (external_torque_pub_ && node_) {
+    std_msgs::msg::Bool msg;
+    msg.data = external_torque_detected;
+    external_torque_pub_->publish(msg);
+  }
+
+  // Process any ROS2 callbacks (if needed)
+  rclcpp::spin_some(node_);
 
   return hardware_interface::return_type::OK;
 }
