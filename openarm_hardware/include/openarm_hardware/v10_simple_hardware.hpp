@@ -119,6 +119,11 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   bool hand_;
   bool can_fd_;
 
+  // Torque limiting parameters
+  std::vector<double> max_torque_;           // Max feedforward torque per joint (Nm)
+  std::vector<double> max_pos_error_;        // Max position error per joint (rad)
+  std::vector<double> max_vel_error_;       // Max velocity error per joint (rad/s)
+
   // OpenArm instance
   std::unique_ptr<openarm::can::socket::OpenArm> openarm_;
 

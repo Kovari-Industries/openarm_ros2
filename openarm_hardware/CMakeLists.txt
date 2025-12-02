@@ -25,6 +25,8 @@ find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 
 # Find openarm_can library
 find_package(OpenArmCAN REQUIRED)
@@ -48,6 +50,8 @@ ament_target_dependencies(${PROJECT_NAME}
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  sensor_msgs
+  std_msgs
 )
 
 pluginlib_export_plugin_description_file(hardware_interface openarm_hardware.xml)
@@ -72,6 +76,8 @@ ament_export_dependencies(
   hardware_interface
   pluginlib
   rclcpp
+  sensor_msgs
+  std_msgs
 )
 
 ament_package()
