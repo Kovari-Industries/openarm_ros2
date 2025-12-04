@@ -463,14 +463,43 @@ hardware_interface::return_type OpenArm_v10KDLHW::read(
 }
 
 hardware_interface::return_type OpenArm_v10KDLHW::write(
-    const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
-  // Control arm motors with MIT control
-  std::vector<openarm::damiao_motor::MITParam> arm_params;
-  for (size_t i = 0; i < ARM_DOF; ++i) {
-    arm_params.push_back({DEFAULT_KP[i], DEFAULT_KD[i], pos_commands_[i],
-                          vel_commands_[i], tau_commands_[i]});
+    const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) 
+{
+  // Optional gravity compensation (compute joint-space gravity torques)
+  std::vector<double> gravity;
+  if (gravity_compensation_enabled_ && kdl_initialized_) {
+    // Update KDL joint state from current pos_states_
+    update_kdl_state_from_joint_states();
+
+    if (!compute_gravity_torques(gravity)) {
+      RCLCPP_WARN(
+          rclcpp::get_logger("OpenArm_v10KDLHW"),
+          "write(): compute_gravity_torques() failed, disabling gravity feedforward for this cycle.");
+      gravity.clear();
+    }
   }
+
+  std::vector<openarm::damiao_motor::MITParam> arm_params;
+  arm_params.reserve(ARM_DOF);
+
+  for (size_t i = 0; i < ARM_DOF; ++i) {
+    double tau_ff = tau_commands_[i];
+
+    if (!gravity.empty() && i < gravity.size()) {
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10KDLHW"),
+              "Taking in tau_ff");
+      tau_ff += gravity[i]*1;
+    }
+
+    arm_params.push_back(
+        {DEFAULT_KP[i], DEFAULT_KD[i],
+         pos_commands_[i],
+         vel_commands_[i],
+         tau_ff});
+  }
+
   openarm_->get_arm().mit_control_all(arm_params);
+
   // Control gripper if enabled
   if (hand_ && joint_names_.size() > ARM_DOF) {
     // TODO the true mappings are unimplemented.
@@ -478,6 +507,7 @@ hardware_interface::return_type OpenArm_v10KDLHW::write(
     openarm_->get_gripper().mit_control_all(
         {{GRIPPER_DEFAULT_KP, GRIPPER_DEFAULT_KD, motor_command, 0, 0}});
   }
+
   openarm_->recv_all(1000);
   return hardware_interface::return_type::OK;
 }
