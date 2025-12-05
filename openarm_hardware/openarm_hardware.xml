@@ -19,7 +19,15 @@
          type="openarm_hardware::OpenArm_v10HW"
          base_class_type="hardware_interface::SystemInterface">
     <description>
-      ros2_control hardware interface for OpenArm V10.
+      Simple OpenArm V10 hardware interface (no KDL).
+    </description>
+  </class>
+
+  <class name="openarm_hardware/OpenArm_v10KDLHW"
+         type="openarm_hardware::OpenArm_v10KDLHW"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      OpenArm V10 hardware interface with KDL-based gravity compensation.
     </description>
   </class>
 </library>
