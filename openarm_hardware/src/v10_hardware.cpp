@@ -449,9 +449,9 @@ hardware_interface::return_type OpenArm_v10KDLHW::read(
       oss << "[ ";
       for (double v : g) oss << v << " ";
       oss << "]";
-      RCLCPP_INFO(
-          rclcpp::get_logger("OpenArm_v10KDLHW"),
-          "Gravity torques: %s", oss.str().c_str());
+      // RCLCPP_INFO(
+      //     rclcpp::get_logger("OpenArm_v10KDLHW"),
+      //     "Gravity torques: %s", oss.str().c_str());
     } else {
       RCLCPP_ERROR(
           rclcpp::get_logger("OpenArm_v10KDLHW"),
@@ -486,8 +486,8 @@ hardware_interface::return_type OpenArm_v10KDLHW::write(
     double tau_ff = tau_commands_[i];
 
     if (!gravity.empty() && i < gravity.size()) {
-      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10KDLHW"),
-              "Taking in tau_ff");
+      // RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10KDLHW"),
+      //         "Taking in tau_ff");
       tau_ff += gravity[i]*1;
     }
 
