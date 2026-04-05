@@ -162,6 +162,9 @@ class OpenArm_v10KDLHW : public hardware_interface::SystemInterface {
   void update_kdl_state_from_joint_states();
 
   bool compute_gravity_torques(std::vector<double>& out_gravity);
+  bool send_startup_can_sequence();
+  bool send_can_frame(uint32_t can_id,
+                      const std::initializer_list<uint8_t>& data);
 
   double joint_to_motor_radians(double joint_value);
   double motor_radians_to_joint(double motor_radians);

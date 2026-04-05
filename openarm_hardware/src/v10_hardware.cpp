@@ -15,10 +15,20 @@
 #include "openarm_hardware/v10_hardware.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <thread>
 #include <vector>
+
+#include <linux/can.h>
+#include <linux/can/raw.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/logging.hpp"
@@ -91,7 +101,8 @@ bool OpenArm_v10KDLHW::parse_config(const hardware_interface::HardwareInfo& info
   if (it != info.hardware_parameters.end()) {
     tip_link_name_ = it->second;
   } else {
-    tip_link_name_ = "openarm_" + arm_prefix_ + "link7";
+    tip_link_name_ =
+        "openarm_" + arm_prefix_ + (hand_ ? "hand" : "link7");
   }
 
   RCLCPP_INFO(
@@ -389,6 +400,11 @@ OpenArm_v10KDLHW::export_command_interfaces() {
 hardware_interface::CallbackReturn OpenArm_v10KDLHW::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10KDLHW"), "Activating OpenArm V10...");
+  if (!send_startup_can_sequence()) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10KDLHW"),
+                 "Failed to send OpenArm startup CAN sequence");
+    return CallbackReturn::ERROR;
+  }
   openarm_->set_callback_mode_all(openarm::damiao_motor::CallbackMode::STATE);
   openarm_->enable_all();
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -510,6 +526,88 @@ hardware_interface::return_type OpenArm_v10KDLHW::write(
 
   openarm_->recv_all(1000);
   return hardware_interface::return_type::OK;
+}
+
+bool OpenArm_v10KDLHW::send_startup_can_sequence() {
+  auto logger = rclcpp::get_logger("OpenArm_v10KDLHW");
+  RCLCPP_INFO(logger, "Sending OpenArm startup sequence on %s...",
+              can_interface_.c_str());
+
+  for (uint32_t can_id = 0x001; can_id <= 0x008; ++can_id) {
+    if (!send_can_frame(can_id, {0xFF, 0xFF, 0xFF, 0xFF,
+                                 0xFF, 0xFF, 0xFF, 0xFC})) {
+      RCLCPP_ERROR(logger, "Failed enabling motor at CAN ID 0x%03X", can_id);
+      return false;
+    }
+  }
+
+  for (uint8_t motor_id = 0x01; motor_id <= 0x08; ++motor_id) {
+    if (!send_can_frame(0x7FF, {motor_id, 0x00, 0x55, 0x0A,
+                                0x01, 0x00, 0x00, 0x00})) {
+      RCLCPP_ERROR(logger,
+                   "Failed switching motor 0x%02X to MIT control mode",
+                   motor_id);
+      return false;
+    }
+  }
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  return true;
+}
+
+bool OpenArm_v10KDLHW::send_can_frame(
+    uint32_t can_id, const std::initializer_list<uint8_t>& data) {
+  if (data.size() > CAN_MAX_DLEN) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10KDLHW"),
+                 "Refusing to send CAN frame with %zu bytes", data.size());
+    return false;
+  }
+
+  int socket_fd = ::socket(PF_CAN, SOCK_RAW, CAN_RAW);
+  if (socket_fd < 0) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10KDLHW"),
+                 "socket(PF_CAN) failed on %s: %s",
+                 can_interface_.c_str(), std::strerror(errno));
+    return false;
+  }
+
+  ifreq ifr {};
+  std::snprintf(ifr.ifr_name, IFNAMSIZ, "%s", can_interface_.c_str());
+  if (::ioctl(socket_fd, SIOCGIFINDEX, &ifr) < 0) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10KDLHW"),
+                 "ioctl(SIOCGIFINDEX) failed on %s: %s",
+                 can_interface_.c_str(), std::strerror(errno));
+    ::close(socket_fd);
+    return false;
+  }
+
+  sockaddr_can addr {};
+  addr.can_family = AF_CAN;
+  addr.can_ifindex = ifr.ifr_ifindex;
+  if (::bind(socket_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10KDLHW"),
+                 "bind() failed on %s: %s",
+                 can_interface_.c_str(), std::strerror(errno));
+    ::close(socket_fd);
+    return false;
+  }
+
+  can_frame frame {};
+  frame.can_id = can_id;
+  frame.len = static_cast<__u8>(data.size());
+  std::copy(data.begin(), data.end(), frame.data);
+
+  const ssize_t bytes_written = ::write(socket_fd, &frame, sizeof(frame));
+  ::close(socket_fd);
+
+  if (bytes_written != static_cast<ssize_t>(sizeof(frame))) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10KDLHW"),
+                 "write() failed for CAN ID 0x%03X on %s: %s",
+                 can_id, can_interface_.c_str(), std::strerror(errno));
+    return false;
+  }
+
+  return true;
 }
 
 void OpenArm_v10KDLHW::return_to_zero() {
