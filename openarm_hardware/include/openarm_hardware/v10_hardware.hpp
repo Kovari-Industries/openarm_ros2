@@ -16,10 +16,18 @@
 
 #include <chrono>
 #include <memory>
-#include <openarm/can/socket/openarm.hpp>
-#include <openarm/damiao_motor/dm_motor_constants.hpp>
 #include <string>
 #include <vector>
+
+#include <openarm/can/socket/openarm.hpp>
+#include <openarm/damiao_motor/dm_motor_constants.hpp>
+
+#include <kdl/tree.hpp>
+#include <kdl/chain.hpp>
+#include <kdl/jntarray.hpp>
+#include <kdl/jntspaceinertiamatrix.hpp>
+#include <kdl/chaindynparam.hpp>
+#include <kdl_parser/kdl_parser.hpp>
 
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
@@ -32,15 +40,16 @@
 namespace openarm_hardware {
 
 /**
- * @brief Simplified OpenArm V10 Hardware Interface
+ * @brief OpenArm V10 Hardware Interface with internal KDL dynamics
  *
- * This is a simplified version that uses the OpenArm CAN API directly,
- * following the pattern from full_arm.cpp example. Much simpler than
- * the original implementation.
+ * - Talks to the motors via OpenArm CAN API.
+ * - Exposes ROS2 control state/command interfaces.
+ * - Owns a KDL chain for the 7-DOF arm and can compute gravity torques
+ *   in the hardware layer (gravity compensation).
  */
-class OpenArm_v10HW : public hardware_interface::SystemInterface {
+class OpenArm_v10KDLHW : public hardware_interface::SystemInterface {
  public:
-  OpenArm_v10HW();
+  OpenArm_v10KDLHW();
 
   TEMPLATES__ROS2_CONTROL__VISIBILITY_PUBLIC
   hardware_interface::CallbackReturn on_init(
@@ -75,11 +84,9 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
       const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
  private:
-  // V10 default configuration
   static constexpr size_t ARM_DOF = 7;
   static constexpr bool ENABLE_GRIPPER = true;
 
-  // Default motor configuration for V10
   const std::vector<openarm::damiao_motor::MotorType> DEFAULT_MOTOR_TYPES = {
       openarm::damiao_motor::MotorType::DM8009,  // Joint 1
       openarm::damiao_motor::MotorType::DM8009,  // Joint 2
@@ -100,7 +107,6 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   const uint32_t DEFAULT_GRIPPER_SEND_CAN_ID = 0x08;
   const uint32_t DEFAULT_GRIPPER_RECV_CAN_ID = 0x18;
 
-  // Default gains
   const std::vector<double> DEFAULT_KP = {45.0, 45.0, 45.0, 45.0,
                                           10.0,  10.0,  10.0,  5.0};
   const std::vector<double> DEFAULT_KD = {2.75, 2.5, 0.7, 0.4,
@@ -113,19 +119,19 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   const double GRIPPER_DEFAULT_KP = 5.0;
   const double GRIPPER_DEFAULT_KD = 0.1;
 
-  // Configuration
   std::string can_interface_;
   std::string arm_prefix_;
   bool hand_;
   bool can_fd_;
 
-  // OpenArm instance
+  bool gravity_compensation_enabled_{true};
+  std::string root_link_name_;
+  std::string tip_link_name_;
+
   std::unique_ptr<openarm::can::socket::OpenArm> openarm_;
 
-  // Generated joint names for this arm instance
   std::vector<std::string> joint_names_;
 
-  // ROS2 control state and command vectors
   std::vector<double> pos_commands_;
   std::vector<double> vel_commands_;
   std::vector<double> tau_commands_;
@@ -133,15 +139,32 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   std::vector<double> vel_states_;
   std::vector<double> tau_states_;
 
-  // Helper methods
+  bool kdl_initialized_{false};
+
+  KDL::Tree kdl_tree_;
+  KDL::Chain kdl_chain_;
+
+  KDL::Vector gravity_vector_{0.0, 0.0, -9.81};
+
+  std::unique_ptr<KDL::ChainDynParam> kdl_dyn_;
+
+  KDL::JntArray kdl_q_;
+  KDL::JntArray kdl_qdot_;
+  KDL::JntArray kdl_G_;
+
   void return_to_zero();
   bool parse_config(const hardware_interface::HardwareInfo& info);
   void generate_joint_names();
   void set_current_pose();
 
-  // Gripper mapping functions
+  bool init_kdl_from_urdf(const hardware_interface::HardwareInfo& info);
+
+  void update_kdl_state_from_joint_states();
+
+  bool compute_gravity_torques(std::vector<double>& out_gravity);
+
   double joint_to_motor_radians(double joint_value);
   double motor_radians_to_joint(double motor_radians);
 };
 
-}  // namespace openarm_hardware
+}

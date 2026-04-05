@@ -25,22 +25,31 @@ find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 
-# Find openarm_can library
+find_package(eigen3_cmake_module REQUIRED)
+find_package(Eigen3 REQUIRED NO_MODULE)
+find_package(orocos_kdl REQUIRED)
+find_package(kdl_parser REQUIRED)
+
 find_package(OpenArmCAN REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
   src/v10_simple_hardware.cpp
+  src/v10_hardware.cpp
 )
 
 target_include_directories(
   ${PROJECT_NAME}
   PRIVATE
-  include
+    include
+    ${EIGEN3_INCLUDE_DIRS}
 )
 
 target_link_libraries(${PROJECT_NAME}
   OpenArmCAN::openarm_can
+  orocos-kdl
 )
 
 ament_target_dependencies(${PROJECT_NAME}
@@ -48,6 +57,10 @@ ament_target_dependencies(${PROJECT_NAME}
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  sensor_msgs
+  std_msgs
+  kdl_parser
+  orocos_kdl
 )
 
 pluginlib_export_plugin_description_file(hardware_interface openarm_hardware.xml)
@@ -55,23 +68,30 @@ pluginlib_export_plugin_description_file(hardware_interface openarm_hardware.xml
 install(
   TARGETS ${PROJECT_NAME}
   DESTINATION lib
-  )
+)
 
-install(DIRECTORY include/
-DESTINATION include
+install(
+  DIRECTORY include/
+  DESTINATION include
 )
 
 ament_export_include_directories(
   include
+  ${EIGEN3_INCLUDE_DIRS}
 )
 
 ament_export_libraries(
   ${PROJECT_NAME}
 )
+
 ament_export_dependencies(
   hardware_interface
   pluginlib
   rclcpp
+  sensor_msgs
+  std_msgs
+  kdl_parser
+  orocos_kdl
 )
 
 ament_package()
