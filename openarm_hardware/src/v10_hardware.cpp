@@ -406,7 +406,6 @@ hardware_interface::CallbackReturn OpenArm_v10KDLHW::on_activate(
     return CallbackReturn::ERROR;
   }
   openarm_->set_callback_mode_all(openarm::damiao_motor::CallbackMode::STATE);
-  openarm_->enable_all();
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   openarm_->recv_all();
 
