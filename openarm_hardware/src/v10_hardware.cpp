@@ -40,6 +40,22 @@ OpenArm_v10KDLHW::OpenArm_v10KDLHW() = default;
 
 static constexpr double GRIPPER_METERS_PER_RAD = 0.0810; 
 
+void OpenArm_v10KDLHW::configure_can_ids() {
+  arm_send_can_ids_ = DEFAULT_SEND_CAN_IDS;
+  arm_recv_can_ids_ = DEFAULT_RECV_CAN_IDS;
+  gripper_send_can_id_ = DEFAULT_GRIPPER_SEND_CAN_ID;
+  gripper_recv_can_id_ = DEFAULT_GRIPPER_RECV_CAN_ID;
+  startup_motor_ids_ = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+
+  if (arm_prefix_ == "right_") {
+    arm_send_can_ids_ = {0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F};
+    arm_recv_can_ids_ = {0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F};
+    gripper_send_can_id_ = 0x10;
+    gripper_recv_can_id_ = 0x20;
+    startup_motor_ids_ = {0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10};
+  }
+}
+
 bool OpenArm_v10KDLHW::parse_config(const hardware_interface::HardwareInfo& info) {
   // Parse CAN interface (default: can0)
   auto it = info.hardware_parameters.find("can_interface");
@@ -78,6 +94,8 @@ bool OpenArm_v10KDLHW::parse_config(const hardware_interface::HardwareInfo& info
     can_fd_ = (value == "true");
   }
 
+  configure_can_ids();
+
   // Gravity compensation toggle (default: true)
   it = info.hardware_parameters.find("gravity_compensation");
   if (it == info.hardware_parameters.end()) {
@@ -108,14 +126,22 @@ bool OpenArm_v10KDLHW::parse_config(const hardware_interface::HardwareInfo& info
   RCLCPP_INFO(
       rclcpp::get_logger("OpenArm_v10KDLHW"),
       "Configuration: CAN=%s, arm_prefix=%s, hand=%s, can_fd=%s, "
-      "gravity_comp=%s, kdl_root=%s, kdl_tip=%s",
+      "gravity_comp=%s, kdl_root=%s, kdl_tip=%s, "
+      "arm_send_ids=[0x%02X..0x%02X], arm_recv_ids=[0x%02X..0x%02X], "
+      "gripper_send_id=0x%02X, gripper_recv_id=0x%02X",
       can_interface_.c_str(),
       arm_prefix_.c_str(),
       hand_ ? "enabled" : "disabled",
       can_fd_ ? "enabled" : "disabled",
       gravity_compensation_enabled_ ? "enabled" : "disabled",
       root_link_name_.c_str(),
-      tip_link_name_.c_str());
+      tip_link_name_.c_str(),
+      arm_send_can_ids_.front(),
+      arm_send_can_ids_.back(),
+      arm_recv_can_ids_.front(),
+      arm_recv_can_ids_.back(),
+      gripper_send_can_id_,
+      gripper_recv_can_id_);
 
   return true;
 }
@@ -235,9 +261,9 @@ hardware_interface::CallbackReturn OpenArm_v10KDLHW::on_init(
   openarm_ =
       std::make_unique<openarm::can::socket::OpenArm>(can_interface_, can_fd_);
 
-  // Initialize arm motors with V10 defaults
+  // Initialize arm motors with the CAN IDs assigned to this arm instance.
   openarm_->init_arm_motors(
-      DEFAULT_MOTOR_TYPES, DEFAULT_SEND_CAN_IDS, DEFAULT_RECV_CAN_IDS);
+      DEFAULT_MOTOR_TYPES, arm_send_can_ids_, arm_recv_can_ids_);
 
   // Initialize gripper if enabled
   if (hand_) {
@@ -245,8 +271,8 @@ hardware_interface::CallbackReturn OpenArm_v10KDLHW::on_init(
                 "Initializing gripper...");
     openarm_->init_gripper_motor(
         DEFAULT_GRIPPER_MOTOR_TYPE,
-        DEFAULT_GRIPPER_SEND_CAN_ID,
-        DEFAULT_GRIPPER_RECV_CAN_ID);
+        gripper_send_can_id_,
+        gripper_recv_can_id_);
   }
 
   // Initialize state and command vectors based on generated joint count
@@ -532,7 +558,7 @@ bool OpenArm_v10KDLHW::send_startup_can_sequence() {
   RCLCPP_INFO(logger, "Sending OpenArm startup sequence on %s...",
               can_interface_.c_str());
 
-  for (uint32_t can_id = 0x001; can_id <= 0x008; ++can_id) {
+  for (uint32_t can_id : startup_motor_ids_) {
     if (!send_can_frame(can_id, {0xFF, 0xFF, 0xFF, 0xFF,
                                  0xFF, 0xFF, 0xFF, 0xFC})) {
       RCLCPP_ERROR(logger, "Failed enabling motor at CAN ID 0x%03X", can_id);
@@ -540,12 +566,12 @@ bool OpenArm_v10KDLHW::send_startup_can_sequence() {
     }
   }
 
-  for (uint8_t motor_id = 0x01; motor_id <= 0x08; ++motor_id) {
+  for (uint32_t motor_id : startup_motor_ids_) {
     if (!send_can_frame(0x7FF, {motor_id, 0x00, 0x55, 0x0A,
                                 0x01, 0x00, 0x00, 0x00})) {
       RCLCPP_ERROR(logger,
                    "Failed switching motor 0x%02X to MIT control mode",
-                   motor_id);
+                   static_cast<unsigned int>(motor_id));
       return false;
     }
   }

@@ -108,9 +108,9 @@ class OpenArm_v10KDLHW : public hardware_interface::SystemInterface {
   const uint32_t DEFAULT_GRIPPER_RECV_CAN_ID = 0x18;
 
   const std::vector<double> DEFAULT_KP = {45.0, 45.0, 45.0, 45.0,
-                                          10.0,  10.0,  10.0,  5.0};
+                                          10.0,  10.0,  45.0,  5.0};
   const std::vector<double> DEFAULT_KD = {2.75, 2.5, 0.7, 0.4,
-                                          0.7,  0.6, 0.5, 0.1};
+                                          0.7,  0.6, 0.25, 0.1};
 
   const double GRIPPER_JOINT_0_POSITION = 0.044;
   const double GRIPPER_JOINT_1_POSITION = 0.0;
@@ -123,6 +123,11 @@ class OpenArm_v10KDLHW : public hardware_interface::SystemInterface {
   std::string arm_prefix_;
   bool hand_;
   bool can_fd_;
+  std::vector<uint32_t> arm_send_can_ids_;
+  std::vector<uint32_t> arm_recv_can_ids_;
+  uint32_t gripper_send_can_id_;
+  uint32_t gripper_recv_can_id_;
+  std::vector<uint32_t> startup_motor_ids_;
 
   bool gravity_compensation_enabled_{true};
   std::string root_link_name_;
@@ -154,6 +159,7 @@ class OpenArm_v10KDLHW : public hardware_interface::SystemInterface {
 
   void return_to_zero();
   bool parse_config(const hardware_interface::HardwareInfo& info);
+  void configure_can_ids();
   void generate_joint_names();
   void set_current_pose();
 
