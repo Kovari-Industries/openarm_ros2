@@ -107,10 +107,10 @@ class OpenArm_v10KDLHW : public hardware_interface::SystemInterface {
   const uint32_t DEFAULT_GRIPPER_SEND_CAN_ID = 0x08;
   const uint32_t DEFAULT_GRIPPER_RECV_CAN_ID = 0x18;
 
-  const std::vector<double> DEFAULT_KP = {45.0, 45.0, 45.0, 45.0,
-                                          10.0,  10.0,  45.0,  5.0};
-  const std::vector<double> DEFAULT_KD = {2.75, 2.5, 0.7, 0.4,
-                                          0.7,  0.6, 0.25, 0.1};
+  const std::vector<double> DEFAULT_KP = {45.0, 55.0, 25.0, 25.0,
+                                          5.0,  15.0, 15.0, 5.0};
+  const std::vector<double> DEFAULT_KD = {5.5,  7.5,  1.5,  2.25,
+                                          0.9,  1.0,  0.8,  0.1};                                      
 
   const double GRIPPER_JOINT_0_POSITION = 0.044;
   const double GRIPPER_JOINT_1_POSITION = 0.0;
