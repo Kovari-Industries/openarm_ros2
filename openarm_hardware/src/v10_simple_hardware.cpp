@@ -318,46 +318,18 @@ void OpenArm_v10HW::return_to_zero() {
 
 void OpenArm_v10HW::set_current_pose() {
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
-            "Seeting current position...");
-  openarm_->refresh_all();
-  openarm_->recv_all();
+              "Setting current position...");
 
-  const auto& arm_motors = openarm_->get_arm().get_motors();
-  const size_t n = std::min<std::size_t>(ARM_DOF, arm_motors.size());
+  // Use read() to populate state arrays
+  read(rclcpp::Time(), rclcpp::Duration(0, 0));
 
-  // Set the current positions and zero the velocities
-  for (size_t i = 0; i < n; ++i) {
-    const double q   = arm_motors[i].get_position();
-    const double dq  = arm_motors[i].get_velocity();
-    const double tau = arm_motors[i].get_torque();
-
-    pos_states_[i] = q;
-    vel_states_[i] = dq;
-    tau_states_[i] = tau;
-
-    pos_commands_[i] = q;
+  // Copy current states to commands and zero velocities/torques
+  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    pos_commands_[i] = pos_states_[i];
     vel_commands_[i] = 0.0;
     tau_commands_[i] = 0.0;
   }
-
-  // check if gripper exists and set current positions 
-  if (hand_ && joint_names_.size() > ARM_DOF) {
-    const auto& gripper_motors = openarm_->get_gripper().get_motors();
-    if (!gripper_motors.empty()) {
-      const double motor_pos = gripper_motors[0].get_position();
-      const double joint_pos = motor_radians_to_joint(motor_pos);
-
-      pos_states_[ARM_DOF] = joint_pos;
-      vel_states_[ARM_DOF] = 0.0;
-      tau_states_[ARM_DOF] = 0.0;
-
-      pos_commands_[ARM_DOF] = joint_pos;
-      vel_commands_[ARM_DOF] = 0.0;
-      tau_commands_[ARM_DOF] = 0.0;
-    }
-  }
 }
-
 // Gripper mapping helper functions
 double OpenArm_v10HW::joint_to_motor_radians(double joint_value) {
   // Joint 0=closed -> motor 0 rad, Joint 0.044=open -> motor -1.0472 rad
