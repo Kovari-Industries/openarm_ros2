@@ -21,6 +21,11 @@
 #include <string>
 #include <vector>
 
+#include <kdl/chain.hpp>
+#include <kdl/chaindynparam.hpp>
+#include <kdl/jntarray.hpp>
+#include <kdl/tree.hpp>
+
 #include "hardware_interface/handle.hpp"
 #include "hardware_interface/hardware_info.hpp"
 #include "hardware_interface/system_interface.hpp"
@@ -134,11 +139,26 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   std::vector<double> vel_states_;
   std::vector<double> tau_states_;
 
+  // Gravity compensation via KDL
+  bool kdl_initialized_{false};
+  std::string root_link_name_;
+  std::string tip_link_name_;
+  KDL::Tree kdl_tree_;
+  KDL::Chain kdl_chain_;
+  KDL::Vector gravity_vector_;
+  std::unique_ptr<KDL::ChainDynParam> kdl_dyn_;
+  KDL::JntArray kdl_q_;
+  KDL::JntArray kdl_G_;
+
   // Helper methods
   void return_to_zero();
   bool parse_config(const hardware_interface::HardwareInfo& info);
   void generate_joint_names();
   void set_current_pose();
+
+  // KDL helpers
+  bool init_kdl_from_urdf(const std::string& urdf_xml);
+  bool compute_gravity_torques(std::vector<double>& out_gravity);
 
   // Gripper mapping functions
   double joint_to_motor_radians(double joint_value);

@@ -20,6 +20,8 @@
 #include <thread>
 #include <vector>
 
+#include <kdl_parser/kdl_parser.hpp>
+
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -80,6 +82,29 @@ bool OpenArm_v10HW::parse_config(const hardware_interface::HardwareInfo& info) {
     if (it != info.hardware_parameters.end()) {
       gripper_kd_ = std::stod(it->second);
     }
+  }
+
+  // KDL link names for chain extraction
+  it = info.hardware_parameters.find("kdl_root_link");
+  root_link_name_ = (it != info.hardware_parameters.end())
+                        ? it->second
+                        : "openarm_" + arm_prefix_ + "link0";
+
+  it = info.hardware_parameters.find("kdl_tip_link");
+  tip_link_name_ = (it != info.hardware_parameters.end())
+                       ? it->second
+                       : "openarm_" + arm_prefix_ + (hand_ ? "hand" : "link7");
+
+  // Gravity direction depends on how the arm is mounted
+  if (arm_prefix_ == "left_") {
+    gravity_vector_ = KDL::Vector(0.0, 9.81, 0.0);
+  } else if (arm_prefix_ == "right_") {
+    gravity_vector_ = KDL::Vector(0.0, -9.81, 0.0);
+  } else {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                 "Unknown arm_prefix '%s' - cannot determine gravity direction",
+                 arm_prefix_.c_str());
+    return false;
   }
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
@@ -166,6 +191,17 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_init(
   pos_states_.resize(total_joints, 0.0);
   vel_states_.resize(total_joints, 0.0);
   tau_states_.resize(total_joints, 0.0);
+
+  // Initialize KDL for gravity compensation
+  if (!info.original_xml.empty()) {
+    if (!init_kdl_from_urdf(info.original_xml)) {
+      RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10HW"),
+                  "Failed to initialize KDL - gravity compensation disabled");
+    }
+  } else {
+    RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10HW"),
+                "No URDF available - gravity compensation disabled");
+  }
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
               "OpenArm V10 Simple HW initialized successfully");
@@ -278,11 +314,23 @@ hardware_interface::return_type OpenArm_v10HW::read(
 
 hardware_interface::return_type OpenArm_v10HW::write(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
+  // Compute gravity compensation if enabled
+  std::vector<double> gravity;
+  if (kdl_initialized_) {
+    if (!compute_gravity_torques(gravity)) {
+      gravity.clear();
+    }
+  }
+
   // Control arm motors with MIT control
   std::vector<openarm::damiao_motor::MITParam> arm_params;
   for (size_t i = 0; i < ARM_DOF; ++i) {
+    double tau_ff = tau_commands_[i];
+    if (!gravity.empty() && i < gravity.size()) {
+      tau_ff += gravity[i];
+    }
     arm_params.push_back(
-        {kp_[i], kd_[i], pos_commands_[i], vel_commands_[i], tau_commands_[i]});
+        {kp_[i], kd_[i], pos_commands_[i], vel_commands_[i], tau_ff});
   }
   openarm_->get_arm().mit_control_all(arm_params);
   // Control gripper if enabled
@@ -330,6 +378,59 @@ void OpenArm_v10HW::set_current_pose() {
     tau_commands_[i] = 0.0;
   }
 }
+bool OpenArm_v10HW::init_kdl_from_urdf(const std::string& urdf_xml) {
+  auto logger = rclcpp::get_logger("OpenArm_v10HW");
+
+  if (!kdl_parser::treeFromString(urdf_xml, kdl_tree_)) {
+    RCLCPP_ERROR(logger, "Failed to parse URDF into KDL tree");
+    return false;
+  }
+
+  if (!kdl_tree_.getChain(root_link_name_, tip_link_name_, kdl_chain_)) {
+    RCLCPP_ERROR(logger, "Failed to extract KDL chain from '%s' to '%s'",
+                 root_link_name_.c_str(), tip_link_name_.c_str());
+    return false;
+  }
+
+  const unsigned int nj = kdl_chain_.getNrOfJoints();
+  if (nj != ARM_DOF) {
+    RCLCPP_WARN(logger, "KDL chain has %u joints, expected %zu", nj, ARM_DOF);
+  }
+
+  kdl_dyn_ = std::make_unique<KDL::ChainDynParam>(kdl_chain_, gravity_vector_);
+  kdl_q_ = KDL::JntArray(nj);
+  kdl_G_ = KDL::JntArray(nj);
+
+  kdl_initialized_ = true;
+  RCLCPP_INFO(logger, "KDL gravity compensation initialized (root='%s', "
+              "tip='%s', joints=%u)",
+              root_link_name_.c_str(), tip_link_name_.c_str(), nj);
+  return true;
+}
+
+bool OpenArm_v10HW::compute_gravity_torques(std::vector<double>& out_gravity) {
+  if (!kdl_initialized_ || !kdl_dyn_) {
+    return false;
+  }
+
+  const unsigned int nj = kdl_chain_.getNrOfJoints();
+  const size_t n = std::min<size_t>(ARM_DOF, nj);
+
+  for (size_t i = 0; i < n; ++i) {
+    kdl_q_(i) = pos_states_[i];
+  }
+
+  if (kdl_dyn_->JntToGravity(kdl_q_, kdl_G_) != 0) {
+    return false;
+  }
+
+  out_gravity.resize(ARM_DOF, 0.0);
+  for (size_t i = 0; i < n; ++i) {
+    out_gravity[i] = kdl_G_(i);
+  }
+  return true;
+}
+
 // Gripper mapping helper functions
 double OpenArm_v10HW::joint_to_motor_radians(double joint_value) {
   // Joint 0=closed -> motor 0 rad, Joint 0.044=open -> motor -1.0472 rad

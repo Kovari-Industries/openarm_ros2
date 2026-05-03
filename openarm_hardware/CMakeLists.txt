@@ -26,6 +26,11 @@ find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 
+find_package(eigen3_cmake_module REQUIRED)
+find_package(Eigen3 REQUIRED NO_MODULE)
+find_package(orocos_kdl REQUIRED)
+find_package(kdl_parser REQUIRED)
+
 # Find openarm_can library
 find_package(OpenArmCAN REQUIRED)
 
@@ -37,10 +42,12 @@ target_include_directories(
   ${PROJECT_NAME}
   PRIVATE
   include
+  ${EIGEN3_INCLUDE_DIRS}
 )
 
 target_link_libraries(${PROJECT_NAME}
   OpenArmCAN::openarm_can
+  orocos-kdl
 )
 
 ament_target_dependencies(${PROJECT_NAME}
@@ -48,6 +55,8 @@ ament_target_dependencies(${PROJECT_NAME}
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  kdl_parser
+  orocos_kdl
 )
 
 pluginlib_export_plugin_description_file(hardware_interface openarm_hardware.xml)
@@ -73,6 +82,8 @@ ament_export_dependencies(
   openarm_can
   pluginlib
   rclcpp
+  kdl_parser
+  orocos_kdl
 )
 
 ament_package()

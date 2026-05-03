@@ -28,6 +28,9 @@
   <depend>hardware_interface</depend>
   <depend>openarm_can</depend>
   <depend>pluginlib</depend>
+  <depend>kdl_parser</depend>
+  <depend>orocos_kdl</depend>
+  <depend>eigen3_cmake_module</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
